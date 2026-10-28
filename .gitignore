@@ -1,0 +1,3 @@
+build/
+ThirdParty/*.bin
+.DS_Store
