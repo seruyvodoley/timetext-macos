@@ -4,15 +4,54 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/ТаймТекст.app"
 CONT="$APP/Contents"
 MODEL="$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin"
+GIGAAM_MODEL="$ROOT/ThirdParty/v3_e2e_rnnt.ckpt"
+GIGAAM_TOKENIZER="$ROOT/ThirdParty/v3_e2e_rnnt_tokenizer.model"
+GIGAAM_COMMIT="7447938d791c4f3e643386ee22c33777004293a5"
+GIGAAM_RUNTIME="$ROOT/build/gigaam-dist/gigaam-transcribe"
+
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "Для сборки GigaAM нужен Python 3.12 (brew install python@3.12)" >&2
+  exit 1
+fi
+
+if [ ! -f "$GIGAAM_MODEL" ]; then
+  curl -L --fail --retry 3 -o "$GIGAAM_MODEL" https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt.ckpt
+fi
+if [ ! -f "$GIGAAM_TOKENIZER" ]; then
+  curl -L --fail --retry 3 -o "$GIGAAM_TOKENIZER" https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt_tokenizer.model
+fi
+test "$(md5 -q "$GIGAAM_MODEL")" = "2730de7545ac43ad256485a462b0a27a"
+test "$(md5 -q "$GIGAAM_TOKENIZER")" = "3b3bf8370e882885d79731592fc99f98"
+
+VENV="$ROOT/build/gigaam-venv"
+if [ ! -x "$VENV/bin/pyinstaller" ]; then
+  python3.12 -m venv "$VENV"
+  "$VENV/bin/pip" install --upgrade pip
+  "$VENV/bin/pip" install "git+https://github.com/salute-developers/GigaAM.git@$GIGAAM_COMMIT" pyinstaller
+fi
+if [ ! -x "$GIGAAM_RUNTIME/gigaam-transcribe" ] || [ "$ROOT/Packaging/gigaam_transcribe.py" -nt "$GIGAAM_RUNTIME/gigaam-transcribe" ]; then
+  rm -rf "$ROOT/build/gigaam-dist" "$ROOT/build/gigaam-pyinstaller"
+  "$VENV/bin/pyinstaller" --clean --noconfirm --onedir \
+    --name gigaam-transcribe \
+    --distpath "$ROOT/build/gigaam-dist" \
+    --workpath "$ROOT/build/gigaam-pyinstaller" \
+    --collect-all gigaam --collect-all torch --collect-all torchaudio \
+    --collect-all hydra --collect-all omegaconf --collect-all sentencepiece \
+    "$ROOT/Packaging/gigaam_transcribe.py"
+fi
+
 if [ ! -f "$MODEL" ]; then
   curl -L --fail --retry 3 -o "$MODEL" https://huggingface.co/adidsh/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 fi
 echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  $MODEL" | shasum -a 256 -c -
 rm -rf "$APP"
-mkdir -p "$CONT/MacOS" "$CONT/Resources/bin" "$CONT/Resources/Frameworks"
+mkdir -p "$CONT/MacOS" "$CONT/Resources/bin" "$CONT/Resources/Frameworks" "$CONT/Resources/GigaAM" "$CONT/Resources/GigaAMRuntime"
 cp /opt/homebrew/bin/ffmpeg "$CONT/Resources/bin/ffmpeg"
 cp /opt/homebrew/bin/whisper-cli "$CONT/Resources/bin/whisper-cli"
 cp "$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin" "$CONT/Resources/ggml-large-v3-turbo-q5_0.bin"
+cp "$GIGAAM_MODEL" "$CONT/Resources/GigaAM/v3_e2e_rnnt.ckpt"
+cp "$GIGAAM_TOKENIZER" "$CONT/Resources/GigaAM/v3_e2e_rnnt_tokenizer.model"
+ditto "$GIGAAM_RUNTIME" "$CONT/Resources/GigaAMRuntime"
 mkdir -p "$CONT/Resources/Licenses"
 cp /opt/homebrew/Cellar/ffmpeg/9.0.2_1/COPYING.LGPLv2.1 "$CONT/Resources/Licenses/FFmpeg-LGPLv2.1.txt"
 cp /opt/homebrew/Cellar/ffmpeg/9.0.2_1/COPYING.GPLv2 "$CONT/Resources/Licenses/FFmpeg-GPLv2.txt"
@@ -20,12 +59,20 @@ cp /opt/homebrew/Cellar/ffmpeg/9.0.2_1/LICENSE.md "$CONT/Resources/Licenses/FFmp
 cp /opt/homebrew/Cellar/whisper.cpp/1.9.5/LICENSE "$CONT/Resources/Licenses/whisper.cpp-MIT.txt"
 cp /opt/homebrew/Cellar/ggml/0.26.0/LICENSE "$CONT/Resources/Licenses/ggml-MIT.txt"
 cp "$ROOT/LICENSE" "$CONT/Resources/Licenses/ТаймТекст-MIT.txt"
+curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/GigaAM-MIT.txt" https://raw.githubusercontent.com/salute-developers/GigaAM/$GIGAAM_COMMIT/LICENSE
+TORCH_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torch-*.dist-info/licenses' -print -quit)"
+TORCHAUDIO_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torchaudio-*.dist-info/licenses' -print -quit)"
+ditto "$TORCH_LICENSES" "$CONT/Resources/Licenses/PyTorch"
+ditto "$TORCHAUDIO_LICENSES" "$CONT/Resources/Licenses/TorchAudio"
 cat > "$CONT/Resources/Licenses/ThirdPartyNotices.txt" <<'NOTICE'
-ТаймТекст включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, ggml 0.26.0 и модель large-v3-turbo-q5_0.
+ТаймТекст включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
 Исходный код FFmpeg: https://ffmpeg.org/download.html
 Исходный код whisper.cpp: https://github.com/ggml-org/whisper.cpp
 Исходный код ggml: https://github.com/ggml-org/ggml
-Модель и её карточка: https://huggingface.co/ggerganov/whisper.cpp
+Исходный код и модель GigaAM: https://github.com/salute-developers/GigaAM
+Проверенная ревизия GigaAM: https://github.com/salute-developers/GigaAM/tree/7447938d791c4f3e643386ee22c33777004293a5
+Модель GigaAM-v3 e2e-RNNT: https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt.ckpt
+Модель Whisper large-v3-turbo-q5_0: https://huggingface.co/ggerganov/whisper.cpp
 Некоторые компоненты FFmpeg сборки Homebrew распространяются по GPLv2; другие по LGPLv2.1 или своим лицензиям.
 Тексты лицензий FFmpeg и Whisper/ggml находятся в этой папке.
 NOTICE
@@ -103,8 +150,8 @@ cat > "$CONT/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>ТаймТекст</string>
 <key>CFBundleDisplayName</key><string>ТаймТекст</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleVersion</key><string>2</string>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -115,7 +162,7 @@ PLIST
 printf 'APPL????' > "$CONT/PkgInfo"
 swiftc -parse-as-library -O -target arm64-apple-macosx27.0 "$ROOT/Sources/TimeTextApp.swift" -o "$CONT/MacOS/TimeText" -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers
 chmod +x "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/MacOS/TimeText"
-find "$CONT/Resources/bin" "$CONT/Resources/Frameworks" -type f \( -name '*.dylib' -o -perm -111 \) -print0 | while IFS= read -r -d '' ITEM; do
+find "$CONT/Resources/bin" "$CONT/Resources/Frameworks" "$CONT/Resources/GigaAMRuntime" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) -print0 | while IFS= read -r -d '' ITEM; do
   codesign --force --sign - "$ITEM"
 done
 codesign --force --deep --sign - "$APP"

@@ -20,6 +20,7 @@ struct MainView: View {
     @State private var progress = false
     @State private var selectedFormat = "TXT"
     @State private var language = "Русский"
+    @State private var selectedEngine = "GigaAM"
     @State private var process: Process?
     @State private var resultURL: URL?
     @State private var errorMessage: String?
@@ -34,7 +35,7 @@ struct MainView: View {
                     .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("ТаймТекст").font(.system(size: 25, weight: .semibold))
-                    Text("Расшифровка видео с таймкодами · работает без интернета")
+                    Text(selectedEngine == "GigaAM" ? "Русская речь · GigaAM от Сбера · офлайн" : "Мультиязычная расшифровка · Whisper · офлайн")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -55,18 +56,27 @@ struct MainView: View {
 
             HStack(spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Язык речи").font(.caption).foregroundStyle(.secondary)
-                    Picker("Язык речи", selection: $language) {
-                        Text("Русский").tag("Русский")
-                        Text("Определить автоматически").tag("Авто")
-                    }.labelsHidden().frame(width: 205)
+                    Text("Распознавание").font(.caption).foregroundStyle(.secondary)
+                    Picker("Распознавание", selection: $selectedEngine) {
+                        Text("GigaAM от Сбера — русский").tag("GigaAM")
+                        Text("Whisper — разные языки").tag("Whisper")
+                    }.labelsHidden().frame(width: 200)
+                }
+                if selectedEngine == "Whisper" {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Язык речи").font(.caption).foregroundStyle(.secondary)
+                        Picker("Язык речи", selection: $language) {
+                            Text("Русский").tag("Русский")
+                            Text("Определить автоматически").tag("Авто")
+                        }.labelsHidden().frame(width: 170)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Формат результата").font(.caption).foregroundStyle(.secondary)
                     Picker("Формат результата", selection: $selectedFormat) {
                         Text("TXT с таймкодами").tag("TXT")
                         Text("Word с таймкодами").tag("DOCX")
-                    }.labelsHidden().frame(width: 205)
+                    }.labelsHidden().frame(width: 150)
                 }
             }
 
@@ -133,14 +143,17 @@ struct MainView: View {
         isWorking = true; progress = true; resultURL = nil
         let files = selectedFiles
         let format = selectedFormat
+        let engine = selectedEngine
         let lang = language == "Русский" ? "ru" : "auto"
         status = "Подготовка аудио…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 var last: URL?
                 for (index, input) in files.enumerated() {
-                    DispatchQueue.main.async { status = "Файл \(index + 1) из \(files.count): подготовка аудио…" }
-                    let output = try Self.runTranscription(input: input, language: lang, app: Bundle.main.bundleURL) { proc in
+                    DispatchQueue.main.async {
+                        status = "Файл \(index + 1) из \(files.count): подготовка аудио…"
+                    }
+                    let output = try Self.runTranscription(input: input, language: lang, engine: engine, app: Bundle.main.bundleURL) { proc in
                         DispatchQueue.main.async { process = proc }
                     }
                     let destination = input.deletingPathExtension().appendingPathExtension(format.lowercased() == "txt" ? "txt" : "docx")
@@ -168,7 +181,7 @@ struct MainView: View {
         isWorking = false; progress = false; status = "Операция отменена"
     }
 
-    private static func runTranscription(input: URL, language: String, app: URL, onProcess: (Process) -> Void) throws -> String {
+    private static func runTranscription(input: URL, language: String, engine: String, app: URL, onProcess: (Process) -> Void) throws -> String {
         let resources = app.appendingPathComponent("Contents/Resources")
         let bin = resources.appendingPathComponent("bin")
         let ffmpeg = bin.appendingPathComponent("ffmpeg")
@@ -181,9 +194,18 @@ struct MainView: View {
         let base = work.appendingPathComponent("result")
 
         try execute(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-i", input.path, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", audio.path], onProcess)
+        if engine == "GigaAM" {
+            let gigaam = resources.appendingPathComponent("GigaAMRuntime/gigaam-transcribe")
+            let bundledModel = resources.appendingPathComponent("GigaAM")
+            try execute(gigaam, ["--input", audio.path, "--output", base.path + ".srt", "--model-dir", bundledModel.path], onProcess)
+            return try parseSRT(at: URL(fileURLWithPath: base.path + ".srt"))
+        }
         let langArg = language == "auto" ? "auto" : language
         try execute(whisper, ["-m", model.path, "-f", audio.path, "-l", langArg, "-osrt", "-of", base.path, "-np"], onProcess)
-        let srtURL = URL(fileURLWithPath: base.path + ".srt")
+        return try parseSRT(at: URL(fileURLWithPath: base.path + ".srt"))
+    }
+
+    private static func parseSRT(at srtURL: URL) throws -> String {
         let srt = try String(contentsOf: srtURL, encoding: .utf8)
         let lines = srt.components(separatedBy: .newlines)
         var result: [String] = []
