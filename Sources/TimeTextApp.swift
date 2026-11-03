@@ -303,9 +303,15 @@ struct MainView: View {
                 sectionTitle("Предпросмотр выжимки", icon: "text.alignleft")
                 Spacer()
                 if !summaryPreview.isEmpty {
-                    Text("ПЕРВЫЙ РЕЗУЛЬТАТ")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .tracking(0.8).foregroundStyle(ink.opacity(0.38))
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(summaryPreview, forType: .string)
+                        status = "Выжимка скопирована"
+                    } label: {
+                        Label("Копировать", systemImage: "doc.on.doc")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(sea).disabled(isWorking)
                 }
             }
             ScrollView {
@@ -328,7 +334,7 @@ struct MainView: View {
                     }
                 }
             }
-            .frame(maxHeight: .infinity)
+            .frame(minHeight: 170, maxHeight: .infinity)
             .background(.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.opacity(0.08), lineWidth: 1))
         }
