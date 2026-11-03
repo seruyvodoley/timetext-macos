@@ -571,17 +571,18 @@ struct MainView: View {
         default: formatInstruction = "Оформи результат короткими тезисами с маркерами."
         }
         let sizeInstruction = length == "Подробная" ? "Дай содержательное изложение на 6–10 предложений, сохрани важные детали и оговорки." : "Дай короткое изложение на 2–4 коротких предложения."
+        let lengthDescriptor = length == "Подробная" ? "подробное" : "краткое"
         let timeInstruction = timestamps ? "Сохраняй исходные таймкоды рядом с соответствующими мыслями, если они присутствуют во фрагменте. Не придумывай таймкоды." : "Не включай таймкоды в результат."
         var summaries: [String] = []
         for (index, chunk) in chunks.enumerated() {
-            let instruction = "Составь \(length.lowercased()) содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Ответь по-русски. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
+            let instruction = "Составь \(lengthDescriptor) содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Ответь по-русски. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
             summaries.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 360 : 180))
         }
         while summaries.count > 1 {
             var next: [String] = []
             for group in stride(from: 0, to: summaries.count, by: 6) {
                 let part = Array(summaries[group..<min(group + 6, summaries.count)])
-                let instruction = "Сведи заметки по одной расшифровке в единое \(length.lowercased()) содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Пиши по-русски. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
+                let instruction = "Сведи заметки по одной расшифровке в единое \(lengthDescriptor) содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Пиши по-русски. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
                 next.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 420 : 220))
             }
             summaries = next
