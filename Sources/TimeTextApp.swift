@@ -7,7 +7,7 @@ struct TimeTextApp: App {
     var body: some Scene {
         WindowGroup {
             MainView()
-                .frame(minWidth: 660, minHeight: 530)
+                .frame(minWidth: 940, minHeight: 650)
         }
         .windowResizability(.contentSize)
     }
@@ -15,105 +15,280 @@ struct TimeTextApp: App {
 
 struct MainView: View {
     @State private var selectedFiles: [URL] = []
+    @State private var focusedFile: URL?
     @State private var isWorking = false
-    @State private var status = "Перетащите сюда видео или нажмите «Выбрать видео»"
+    @State private var status = "Добавьте файлы для начала"
     @State private var progress = false
     @State private var selectedFormat = "TXT"
     @State private var language = "Русский"
     @State private var selectedEngine = "GigaAM"
+    @State private var includeTranscript = true
     @State private var includeSummary = true
     @State private var process: Process?
-    @State private var resultURL: URL?
+    @State private var resultFiles: [URL] = []
     @State private var errorMessage: String?
+    @AppStorage("timetext.exportFolder") private var outputFolderPath = ""
 
     private let accepted: Set<String> = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mpeg", "mpg", "wmv", "flv", "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"]
+    private let ink = Color(red: 0.07, green: 0.17, blue: 0.23)
+    private let paper = Color(red: 0.96, green: 0.975, blue: 0.98)
+    private let sea = Color(red: 0.19, green: 0.68, blue: 0.59)
+    private let amber = Color(red: 0.91, green: 0.65, blue: 0.31)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 13) {
-                Image(systemName: "waveform.and.mic")
-                    .font(.system(size: 32, weight: .medium))
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("ТаймТекст").font(.system(size: 25, weight: .semibold))
-                    Text(selectedEngine == "GigaAM" ? "Русская речь · GigaAM от Сбера · офлайн" : "Мультиязычная расшифровка · Whisper · офлайн")
-                        .font(.system(size: 13)).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            VStack(spacing: 10) {
-                Image(systemName: "arrow.down.doc")
-                    .font(.system(size: 31)).foregroundStyle(.secondary)
-                Text(selectedFiles.isEmpty ? "Перетащите файл сюда" : selectedFiles.map(\.lastPathComponent).joined(separator: "\n"))
-                    .font(.system(size: 14, weight: .medium)).multilineTextAlignment(.center).lineLimit(3)
-                Button("Выбрать видео") { chooseFiles() }
-                    .buttonStyle(.bordered)
-            }
-            .frame(maxWidth: .infinity, minHeight: 150)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .controlBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1, dash: [6])))
-            .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: acceptDrop)
-
-            HStack(spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Распознавание").font(.caption).foregroundStyle(.secondary)
-                    Picker("Распознавание", selection: $selectedEngine) {
-                        Text("GigaAM от Сбера — русский").tag("GigaAM")
-                        Text("Whisper — разные языки").tag("Whisper")
-                    }.labelsHidden().frame(width: 200)
-                }
-                if selectedEngine == "Whisper" {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Язык речи").font(.caption).foregroundStyle(.secondary)
-                        Picker("Язык речи", selection: $language) {
-                            Text("Русский").tag("Русский")
-                            Text("Определить автоматически").tag("Авто")
-                        }.labelsHidden().frame(width: 170)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Формат результата").font(.caption).foregroundStyle(.secondary)
-                    Picker("Формат результата", selection: $selectedFormat) {
-                        Text("TXT с таймкодами").tag("TXT")
-                        Text("Word с таймкодами").tag("DOCX")
-                    }.labelsHidden().frame(width: 150)
-                }
-            }
-
-            Toggle("Добавить краткое содержание (локальная нейросеть)", isOn: $includeSummary)
-                .toggleStyle(.checkbox)
-            Text("Qwen3 работает на этом Mac; содержание аудио никуда не отправляется.")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
-
-            HStack(spacing: 10) {
-                if progress { ProgressView().controlSize(.small) }
-                Text(status).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2)
-                Spacer()
-                if isWorking {
-                    Button("Отменить") { cancel() }.buttonStyle(.bordered)
-                } else {
-                    Button("Расшифровать") { transcribe() }
-                        .buttonStyle(.borderedProminent).disabled(selectedFiles.isEmpty)
-                }
-            }
-            if let resultURL {
-                HStack(spacing: 12) {
-                    Label("Готово: \(resultURL.lastPathComponent)", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green).lineLimit(1)
-                    Spacer()
-                    Button("Открыть") { NSWorkspace.shared.open(resultURL) }
-                    Button("Показать в Finder") { NSWorkspace.shared.activateFileViewerSelecting([resultURL]) }
-                }.font(.system(size: 12))
-            }
-            Spacer(minLength: 0)
-            Text("Распознавание выполняется на этом Mac. Длинные записи могут обрабатываться несколько минут.")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
+        HStack(spacing: 0) {
+            queuePanel
+                .frame(width: 320)
+                .background(ink)
+            Rectangle().fill(ink.opacity(0.12)).frame(width: 1)
+            exportPanel
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(paper)
         }
-        .padding(24)
+        .background(paper)
+        .preferredColorScheme(.light)
         .alert("Не удалось расшифровать", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("Закрыть", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
+    }
+
+    private var queuePanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "waveform.and.mic")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(ink)
+                    .frame(width: 42, height: 42)
+                    .background(sea, in: RoundedRectangle(cornerRadius: 13))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TimeText").font(.system(size: 18, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                    Text("Локальная расшифровка").font(.system(size: 11)).foregroundStyle(.white.opacity(0.62))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 20)
+
+            Rectangle().fill(.white.opacity(0.13)).frame(height: 1).padding(.horizontal, 22)
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Материалы").font(.system(size: 20, weight: .semibold, design: .rounded)).foregroundStyle(.white)
+                Spacer()
+                Text("\(selectedFiles.count)").font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(ink)
+                    .padding(.horizontal, 9).padding(.vertical, 4).background(sea, in: Capsule())
+            }
+            .padding(.horizontal, 22).padding(.top, 21).padding(.bottom, 14)
+
+            Button(action: chooseFiles) {
+                Label("Добавить файлы", systemImage: "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity).padding(.vertical, 11)
+                    .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.16), lineWidth: 1))
+            }
+            .buttonStyle(.plain).foregroundStyle(.white).disabled(isWorking)
+            .padding(.horizontal, 22).padding(.bottom, 12)
+
+            if selectedFiles.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 25, weight: .light)).foregroundStyle(sea)
+                    Text("Перетащите сюда\nвидео или аудио")
+                        .font(.system(size: 14, weight: .medium)).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.86))
+                    Text("MP4 · MOV · MP3 · WAV и другие")
+                        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.48))
+                }
+                .frame(maxWidth: .infinity, minHeight: 200)
+                .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.035)))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [5, 5])))
+                .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: acceptDrop)
+                .padding(.horizontal, 22).padding(.top, 4)
+            } else {
+                ScrollView {
+                    VStack(spacing: 5) {
+                        ForEach(selectedFiles, id: \.self) { file in
+                            HStack(spacing: 9) {
+                                Image(systemName: file.pathExtension.lowercased().contains("mp") ? "waveform" : "film")
+                                    .font(.system(size: 14)).foregroundStyle(focusedFile == file ? sea : .white.opacity(0.54))
+                                    .frame(width: 22)
+                                Button { focusedFile = file } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(file.deletingPathExtension().lastPathComponent)
+                                            .font(.system(size: 12, weight: .medium)).lineLimit(1).foregroundStyle(.white)
+                                        Text(file.pathExtension.uppercased())
+                                            .font(.system(size: 9, weight: .semibold, design: .rounded)).foregroundStyle(.white.opacity(0.48))
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                Button { removeFile(file) } label: {
+                                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.48)).padding(6)
+                                }
+                                .buttonStyle(.plain).disabled(isWorking).help("Убрать из очереди")
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 8)
+                            .background(focusedFile == file ? .white.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: acceptDrop)
+            }
+
+            Spacer(minLength: 16)
+            Rectangle().fill(.white.opacity(0.13)).frame(height: 1).padding(.horizontal, 22)
+            HStack(spacing: 8) {
+                Circle().fill(sea).frame(width: 7, height: 7)
+                Text("Модели включены · работает офлайн")
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.58))
+            }
+            .padding(.horizontal, 22).padding(.vertical, 18)
+        }
+        .frame(maxHeight: .infinity)
+        .onDrop(of: [UTType.fileURL], isTargeted: nil, perform: acceptDrop)
+    }
+
+    private var exportPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Подготовить результат")
+                        .font(.system(size: 25, weight: .bold, design: .rounded)).foregroundStyle(ink)
+                    Text("Расшифровка и короткая выжимка — на этом Mac")
+                        .font(.system(size: 12)).foregroundStyle(ink.opacity(0.62))
+                }
+                Spacer()
+                waveformMark
+            }
+            .padding(.bottom, 23)
+
+            sectionTitle("Папка сохранения", icon: "folder")
+            HStack(spacing: 10) {
+                Image(systemName: outputFolderPath.isEmpty ? "arrow.turn.down.right" : "folder.fill")
+                    .font(.system(size: 13)).foregroundStyle(sea)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(outputFolderPath.isEmpty ? "Рядом с исходными файлами" : URL(fileURLWithPath: outputFolderPath).lastPathComponent)
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(ink).lineLimit(1)
+                    Text(outputFolderPath.isEmpty ? "Каждый результат сохранится у своего файла" : outputFolderPath)
+                        .font(.system(size: 10)).foregroundStyle(ink.opacity(0.56)).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer(minLength: 4)
+                Button("Выбрать папку…", action: chooseOutputFolder)
+                    .buttonStyle(.bordered).controlSize(.small)
+                if !outputFolderPath.isEmpty {
+                    Button { outputFolderPath = "" } label: { Image(systemName: "arrow.uturn.backward") }
+                        .buttonStyle(.bordered).controlSize(.small).help("Сохранять рядом с исходными файлами")
+                }
+            }
+            .padding(12)
+            .background(.white, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.opacity(0.09), lineWidth: 1))
+
+            sectionTitle("Что сохранить", icon: "square.and.arrow.down", top: 22)
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Toggle("Расшифровка с таймкодами", isOn: $includeTranscript).toggleStyle(.checkbox)
+                        .font(.system(size: 12, weight: .medium)).disabled(isWorking)
+                    Spacer()
+                    if includeTranscript {
+                        Picker("Формат расшифровки", selection: $selectedFormat) {
+                            Text("TXT").tag("TXT")
+                            Text("Word").tag("DOCX")
+                        }
+                        .labelsHidden().frame(width: 90).controlSize(.small).disabled(isWorking)
+                    }
+                }
+                Rectangle().fill(ink.opacity(0.08)).frame(height: 1).padding(.vertical, 11)
+                HStack(spacing: 10) {
+                    Toggle("Краткая выжимка", isOn: $includeSummary).toggleStyle(.checkbox)
+                        .font(.system(size: 12, weight: .medium)).disabled(isWorking)
+                    Spacer()
+                    Text("отдельный TXT-файл")
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(ink.opacity(0.52))
+                }
+            }
+            .padding(13)
+            .background(.white, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.opacity(0.09), lineWidth: 1))
+
+            sectionTitle("Распознавание", icon: "waveform", top: 22)
+            HStack(spacing: 14) {
+                Picker("Движок", selection: $selectedEngine) {
+                    Text("GigaAM · русский").tag("GigaAM")
+                    Text("Whisper · разные языки").tag("Whisper")
+                }
+                .frame(width: 190).disabled(isWorking)
+                if selectedEngine == "Whisper" {
+                    Picker("Язык", selection: $language) {
+                        Text("Русский").tag("Русский")
+                        Text("Автоопределение").tag("Авто")
+                    }
+                    .frame(width: 150).disabled(isWorking)
+                }
+                Spacer(minLength: 0)
+            }
+
+            Spacer(minLength: 18)
+
+            if !resultFiles.isEmpty {
+                Rectangle().fill(ink.opacity(0.12)).frame(height: 1).padding(.bottom, 13)
+                HStack {
+                    Text("Готовые файлы").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                    Spacer()
+                    Button("Показать в Finder") { NSWorkspace.shared.activateFileViewerSelecting(resultFiles) }
+                        .font(.system(size: 10, weight: .medium)).buttonStyle(.plain).foregroundStyle(sea)
+                }.padding(.bottom, 8)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(resultFiles, id: \.self) { file in
+                            Button { NSWorkspace.shared.open(file) } label: {
+                                Label(file.lastPathComponent, systemImage: file.pathExtension.lowercased() == "docx" ? "doc.richtext" : "doc.text")
+                                    .font(.system(size: 10, weight: .medium)).lineLimit(1)
+                                    .padding(.horizontal, 10).padding(.vertical, 7)
+                                    .background(.white, in: Capsule())
+                                    .overlay(Capsule().stroke(ink.opacity(0.10), lineWidth: 1))
+                            }.buttonStyle(.plain).foregroundStyle(ink).help("Открыть \(file.lastPathComponent)")
+                        }
+                    }
+                }.frame(height: 34)
+            }
+
+            HStack(spacing: 10) {
+                if progress { ProgressView().controlSize(.small).tint(sea) }
+                Text(status).font(.system(size: 11, weight: .medium)).foregroundStyle(ink.opacity(0.63)).lineLimit(2)
+                Spacer(minLength: 8)
+                if isWorking {
+                    Button("Отменить") { cancel() }.buttonStyle(.bordered).controlSize(.regular)
+                } else {
+                    Button(action: transcribe) {
+                        Label("Обработать \(selectedFiles.count)", systemImage: "waveform.and.mic")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent).tint(sea).controlSize(.large)
+                    .disabled(selectedFiles.isEmpty || (!includeTranscript && !includeSummary))
+                }
+            }
+            .padding(.top, 14)
+        }
+        .padding(.horizontal, 28).padding(.top, 27).padding(.bottom, 22)
+    }
+
+    private var waveformMark: some View {
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(Array([9.0, 17, 25, 13, 21, 29, 15, 23, 11, 19, 8].enumerated()), id: \.offset) { index, height in
+                Capsule().fill(index == 5 ? amber : sea.opacity(index % 3 == 0 ? 0.45 : 0.85))
+                    .frame(width: 3, height: height)
+            }
+        }
+        .frame(height: 32)
+        .accessibilityHidden(true)
+    }
+
+    private func sectionTitle(_ title: String, icon: String, top: CGFloat = 0) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(sea)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+        }
+        .padding(.top, top).padding(.bottom, 9)
     }
 
     private func chooseFiles() {
@@ -124,6 +299,16 @@ struct MainView: View {
         panel.canChooseDirectories = false
         panel.prompt = "Добавить"
         if panel.runModal() == .OK { addFiles(panel.urls) }
+    }
+
+    private func chooseOutputFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Куда сохранить результаты"
+        panel.prompt = "Выбрать папку"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let folder = panel.url { outputFolderPath = folder.path }
     }
 
     private func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -139,54 +324,66 @@ struct MainView: View {
     private func addFiles(_ urls: [URL]) {
         let valid = urls.filter { accepted.contains($0.pathExtension.lowercased()) }
         selectedFiles = Array((selectedFiles + valid).reduce(into: [URL]()) { if !$0.contains($1) { $0.append($1) } })
-        if valid.count != urls.count { status = "Добавлены поддерживаемые файлы; неподдерживаемые пропущены" }
-        else { status = selectedFiles.isEmpty ? "Выберите видео или аудиофайл" : "Файлов в очереди: \(selectedFiles.count)" }
-        resultURL = nil
+        if focusedFile == nil { focusedFile = valid.first }
+        status = valid.count != urls.count ? "Добавлены подходящие файлы; неподдерживаемые пропущены" : "Файлов в очереди: \(selectedFiles.count)"
+    }
+
+    private func removeFile(_ file: URL) {
+        selectedFiles.removeAll { $0 == file }
+        if focusedFile == file { focusedFile = selectedFiles.first }
+        status = selectedFiles.isEmpty ? "Добавьте файлы для начала" : "Файлов в очереди: \(selectedFiles.count)"
     }
 
     private func transcribe() {
-        guard !selectedFiles.isEmpty else { return }
-        isWorking = true; progress = true; resultURL = nil
+        guard !selectedFiles.isEmpty, includeTranscript || includeSummary else { return }
+        isWorking = true; progress = true; resultFiles = []
         let files = selectedFiles
         let format = selectedFormat
         let engine = selectedEngine
+        let saveTranscript = includeTranscript
         let makeSummary = includeSummary
+        let chosenFolder = outputFolderPath
         let lang = language == "Русский" ? "ru" : "auto"
         status = "Подготовка аудио…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                var last: URL?
+                var outputs: [URL] = []
                 var summaryFailed = false
                 for (index, input) in files.enumerated() {
                     DispatchQueue.main.async {
-                        status = "Файл \(index + 1) из \(files.count): подготовка аудио…"
+                        status = "Файл \(index + 1) из \(files.count): распознавание…"
                     }
                     let output = try Self.runTranscription(input: input, language: lang, engine: engine, app: Bundle.main.bundleURL) { proc in
                         DispatchQueue.main.async { process = proc }
                     }
-                    var finalOutput = output
+                    let destinationDirectory = chosenFolder.isEmpty ? input.deletingLastPathComponent() : URL(fileURLWithPath: chosenFolder, isDirectory: true)
+                    try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+                    let baseName = input.deletingPathExtension().lastPathComponent
+                    if saveTranscript {
+                        let ext = format == "TXT" ? "txt" : "docx"
+                        let transcriptURL = Self.uniqueOutputURL(directory: destinationDirectory, baseName: baseName, extension: ext)
+                        if format == "TXT" { try output.write(to: transcriptURL, atomically: true, encoding: .utf8) }
+                        else { try Self.writeDocx(output, to: transcriptURL) }
+                        outputs.append(transcriptURL)
+                    }
                     if makeSummary {
-                        DispatchQueue.main.async { status = "Файл \(index + 1) из \(files.count): готовлю краткое содержание локальной нейросетью…" }
+                        DispatchQueue.main.async { status = "Файл \(index + 1) из \(files.count): создаю отдельную выжимку…" }
                         do {
                             let summary = try Self.makeSummary(output, app: Bundle.main.bundleURL) { proc in
                                 DispatchQueue.main.async { process = proc }
                             }
-                            finalOutput = "КРАТКОЕ СОДЕРЖАНИЕ\n\(summary)\n\nРАСШИФРОВКА С ТАЙМКОДАМИ\n\(output)"
+                            let summaryURL = Self.uniqueOutputURL(directory: destinationDirectory, baseName: "\(baseName)_выжимка", extension: "txt")
+                            try summary.write(to: summaryURL, atomically: true, encoding: .utf8)
+                            outputs.append(summaryURL)
                         } catch {
                             summaryFailed = true
                         }
                     }
-                    let destination = input.deletingPathExtension().appendingPathExtension(format.lowercased() == "txt" ? "txt" : "docx")
-                    if format == "TXT" {
-                        try finalOutput.write(to: destination, atomically: true, encoding: .utf8)
-                    } else {
-                        try Self.writeDocx(finalOutput, to: destination)
-                    }
-                    last = destination
                 }
                 DispatchQueue.main.async {
-                    resultURL = last
-                    status = makeSummary ? (summaryFailed ? "Расшифровка готова; краткое содержание создать не удалось" : "Расшифровка и краткое содержание готовы") : "Расшифровка завершена"
+                    resultFiles = outputs
+                    if summaryFailed { status = outputs.isEmpty ? "Выжимку создать не удалось" : "Файлы готовы; для части записей выжимка не создана" }
+                    else { status = "Готово · сохранено файлов: \(outputs.count)" }
                     isWorking = false; progress = false; process = nil
                 }
             } catch {
@@ -196,6 +393,17 @@ struct MainView: View {
                 }
             }
         }
+    }
+
+    private static func uniqueOutputURL(directory: URL, baseName: String, extension ext: String) -> URL {
+        let fm = FileManager.default
+        var candidate = directory.appendingPathComponent(baseName).appendingPathExtension(ext)
+        var suffix = 2
+        while fm.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("\(baseName)_\(suffix)").appendingPathExtension(ext)
+            suffix += 1
+        }
+        return candidate
     }
 
     private func cancel() {

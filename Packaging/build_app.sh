@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/build/ТаймТекст.app"
+APP="$ROOT/build/TimeText.app"
 CONT="$APP/Contents"
 MODEL="$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin"
 SUMMARY_MODEL="$ROOT/ThirdParty/Qwen3-0.6B-Q8_0.gguf"
@@ -66,19 +66,23 @@ cp /opt/homebrew/Cellar/ffmpeg/9.0.2_1/COPYING.GPLv2 "$CONT/Resources/Licenses/F
 cp /opt/homebrew/Cellar/ffmpeg/9.0.2_1/LICENSE.md "$CONT/Resources/Licenses/FFmpeg-LICENSE.md"
 cp /opt/homebrew/Cellar/whisper.cpp/1.9.5/LICENSE "$CONT/Resources/Licenses/whisper.cpp-MIT.txt"
 cp /opt/homebrew/Cellar/ggml/0.26.0/LICENSE "$CONT/Resources/Licenses/ggml-MIT.txt"
-cp "$ROOT/LICENSE" "$CONT/Resources/Licenses/ТаймТекст-MIT.txt"
+cp "$ROOT/LICENSE" "$CONT/Resources/Licenses/TimeText-MIT.txt"
 curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/GigaAM-MIT.txt" https://raw.githubusercontent.com/salute-developers/GigaAM/$GIGAAM_COMMIT/LICENSE
 TORCH_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torch-*.dist-info/licenses' -print -quit 2>/dev/null || true)"
 TORCHAUDIO_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torchaudio-*.dist-info/licenses' -print -quit 2>/dev/null || true)"
 if [ -n "$TORCH_LICENSES" ]; then
   ditto "$TORCH_LICENSES" "$CONT/Resources/Licenses/PyTorch"
 else
-  ditto "/Applications/ТаймТекст.app/Contents/Resources/Licenses/PyTorch" "$CONT/Resources/Licenses/PyTorch"
+  TORCH_FALLBACK="/Applications/TimeText.app/Contents/Resources/Licenses/PyTorch"
+  [ -d "$TORCH_FALLBACK" ] || TORCH_FALLBACK="/Applications/ТаймТекст.app/Contents/Resources/Licenses/PyTorch"
+  ditto "$TORCH_FALLBACK" "$CONT/Resources/Licenses/PyTorch"
 fi
 if [ -n "$TORCHAUDIO_LICENSES" ]; then
   ditto "$TORCHAUDIO_LICENSES" "$CONT/Resources/Licenses/TorchAudio"
 else
-  ditto "/Applications/ТаймТекст.app/Contents/Resources/Licenses/TorchAudio" "$CONT/Resources/Licenses/TorchAudio"
+  TORCHAUDIO_FALLBACK="/Applications/TimeText.app/Contents/Resources/Licenses/TorchAudio"
+  [ -d "$TORCHAUDIO_FALLBACK" ] || TORCHAUDIO_FALLBACK="/Applications/ТаймТекст.app/Contents/Resources/Licenses/TorchAudio"
+  ditto "$TORCHAUDIO_FALLBACK" "$CONT/Resources/Licenses/TorchAudio"
 fi
 curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/Qwen3-Apache-2.0.txt" https://www.apache.org/licenses/LICENSE-2.0.txt
 cat > "$CONT/Resources/Licenses/Qwen3-Model-Notice.txt" <<'NOTICE'
@@ -86,7 +90,7 @@ Copyright 2024-2025 Alibaba Cloud. Qwen3-0.6B-GGUF, Q8_0 quantization, is licens
 Model repository: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
 NOTICE
 cat > "$CONT/Resources/Licenses/ThirdPartyNotices.txt" <<'NOTICE'
-ТаймТекст включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, llama.cpp 0.6.0_1, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
+TimeText включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, llama.cpp 0.6.0_1, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
 Для краткого содержания локально используется Qwen3-0.6B-Q8_0 от Alibaba Cloud (Apache-2.0).
 Исходный код FFmpeg: https://ffmpeg.org/download.html
 Исходный код whisper.cpp: https://github.com/ggml-org/whisper.cpp
@@ -186,17 +190,17 @@ cat > "$CONT/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>TimeText</string>
 <key>CFBundleIdentifier</key><string>ru.seruyvodoley.timetext</string>
-<key>CFBundleName</key><string>ТаймТекст</string>
-<key>CFBundleDisplayName</key><string>ТаймТекст</string>
+<key>CFBundleName</key><string>TimeText</string>
+<key>CFBundleDisplayName</key><string>TimeText</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.2.0</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSAppleEventsUsageDescription</key><string></string>
-<key>NSHumanReadableCopyright</key><string>2026 · ТаймТекст</string>
+<key>NSHumanReadableCopyright</key><string>2026 · TimeText</string>
 </dict></plist>
 PLIST
 printf 'APPL????' > "$CONT/PkgInfo"
