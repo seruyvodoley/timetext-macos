@@ -152,7 +152,7 @@ while todo:
             seen.add(name)
             todo.append(target)
 
-for binary in [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli", *[fw / n for n in sorted(seen)]]:
+for binary in [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli", contents / "Resources/bin/llama-server", *[fw / n for n in sorted(seen)]]:
     for original in deps(binary):
         name = Path(original).name
         replacement = "@rpath/" + name
@@ -162,6 +162,22 @@ for binary in [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whis
         subprocess.run(["install_name_tool", "-id", "@rpath/" + binary.name, str(binary)], check=True)
     subprocess.run(["install_name_tool", "-add_rpath", "@loader_path/../Frameworks", str(binary)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["install_name_tool", "-add_rpath", "@loader_path", str(binary)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# Normalize absolute Homebrew references that may survive dependencies resolved through symlinks.
+for binary in [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli", contents / "Resources/bin/llama-server", *fw.glob("*.dylib")]:
+    lines = out("otool", "-L", str(binary)).splitlines()[1:]
+    for line in lines:
+        original = line.strip().split(" (compatibility")[0]
+        if original.startswith("/opt/homebrew/"):
+            name = Path(original).name
+            if not (fw / name).exists():
+                raise RuntimeError(f"Homebrew library was not bundled: {original}")
+            subprocess.run(["install_name_tool", "-change", original, "@rpath/" + name, str(binary)], check=True)
+
+for binary in [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli", contents / "Resources/bin/llama-server", *fw.glob("*.dylib")]:
+    remaining = [line.strip() for line in out("otool", "-L", str(binary)).splitlines()[1:] if "/opt/homebrew/" in line]
+    if remaining:
+        raise RuntimeError(f"Host-only Homebrew paths remain in {binary}: {remaining}")
 PY
 
 cat > "$CONT/Info.plist" <<'PLIST'
