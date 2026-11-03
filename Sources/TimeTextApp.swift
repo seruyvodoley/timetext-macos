@@ -45,9 +45,12 @@ struct MainView: View {
                 .frame(width: 320)
                 .background(ink)
             Rectangle().fill(ink.opacity(0.12)).frame(width: 1)
-            exportPanel
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(paper)
+            ScrollView(.vertical) {
+                exportPanel
+            }
+            .scrollIndicators(.visible)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(paper)
         }
         .background(paper)
         .preferredColorScheme(.light)
