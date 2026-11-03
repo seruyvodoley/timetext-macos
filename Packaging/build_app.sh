@@ -206,11 +206,13 @@ cat > "$CONT/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 printf 'APPL????' > "$CONT/PkgInfo"
-swiftc -parse-as-library -O -target arm64-apple-macosx27.0 "$ROOT/Sources/TimeTextApp.swift" -o "$CONT/MacOS/TimeText" -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers
+swiftc -parse-as-library -O -target arm64-apple-macosx27.0 "$ROOT/Sources/TimeTextApp.swift" -o "$CONT/MacOS/TimeText" -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers -framework NaturalLanguage
 chmod +x "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/MacOS/TimeText"
 find "$CONT/Resources" -type f -exec chmod u+w {} +
 find "$CONT/Resources" -type f \( -name '*.dylib' -o -name '*.so' \) -exec strip -S {} +
-strip -S "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/Resources/bin/llama-server" "$CONT/Resources/GigaAMRuntime/gigaam-transcribe" "$CONT/MacOS/TimeText"
+# PyInstaller appends its embedded PKG archive to this executable. Stripping it
+# directly destroys the archive, so keep the launcher intact.
+strip -S "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/Resources/bin/llama-server" "$CONT/MacOS/TimeText"
 find "$CONT/Resources/bin" "$CONT/Resources/Frameworks" "$CONT/Resources/GigaAMRuntime" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) -print0 | while IFS= read -r -d '' ITEM; do
   codesign --force --sign - "$ITEM"
 done

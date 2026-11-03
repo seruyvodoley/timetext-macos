@@ -17,7 +17,7 @@ PY
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/TimeText.app"
 ln -s /Applications "$STAGE/Программы"
-hdiutil create -volname "TimeText" -srcfolder "$STAGE" -ov -format UDZO -imagekey zlib-level=9 "$OUT"
+hdiutil create -volname "TimeText" -srcfolder "$STAGE" -ov -format ULFO "$OUT"
 hdiutil verify "$OUT"
 shasum -a 256 "$OUT" > "$OUT.sha256"
 ls -lh "$OUT" "$OUT.sha256"
