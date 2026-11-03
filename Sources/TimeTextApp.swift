@@ -49,6 +49,7 @@ struct MainView: View {
                 exportPanel
             }
             .scrollIndicators(.visible)
+            .safeAreaInset(edge: .bottom, spacing: 0) { actionFooter }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(paper)
         }
@@ -280,24 +281,29 @@ struct MainView: View {
                 }.frame(height: 34)
             }
 
-            HStack(spacing: 10) {
-                if progress { ProgressView().controlSize(.small).tint(sea) }
-                Text(status).font(.system(size: 11, weight: .medium)).foregroundStyle(ink.opacity(0.63)).lineLimit(2)
-                Spacer(minLength: 8)
-                if isWorking {
-                    Button("Отменить") { cancel() }.buttonStyle(.bordered).controlSize(.regular)
-                } else {
-                    Button(action: transcribe) {
-                        Label("Обработать \(selectedFiles.count)", systemImage: "waveform.and.mic")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .buttonStyle(.borderedProminent).tint(sea).controlSize(.large)
-                    .disabled(selectedFiles.isEmpty || (!includeTranscript && !includeSummary))
-                }
-            }
-            .padding(.top, 14)
         }
         .padding(.horizontal, 28).padding(.top, 27).padding(.bottom, 22)
+    }
+
+    private var actionFooter: some View {
+        HStack(spacing: 10) {
+            if progress { ProgressView().controlSize(.small).tint(sea) }
+            Text(status).font(.system(size: 11, weight: .medium)).foregroundStyle(ink.opacity(0.63)).lineLimit(2)
+            Spacer(minLength: 8)
+            if isWorking {
+                Button("Отменить") { cancel() }.buttonStyle(.bordered).controlSize(.regular)
+            } else {
+                Button(action: transcribe) {
+                    Label("Обработать \(selectedFiles.count)", systemImage: "waveform.and.mic")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent).tint(sea).controlSize(.large)
+                .disabled(selectedFiles.isEmpty || (!includeTranscript && !includeSummary))
+            }
+        }
+        .padding(.horizontal, 28).padding(.top, 12).padding(.bottom, 16)
+        .background(paper)
+        .overlay(alignment: .top) { Rectangle().fill(ink.opacity(0.08)).frame(height: 1) }
     }
 
     private var summaryPreviewPanel: some View {
