@@ -7,7 +7,7 @@ struct TimeTextApp: App {
     var body: some Scene {
         WindowGroup {
             MainView()
-                .frame(minWidth: 620, minHeight: 480)
+                .frame(minWidth: 660, minHeight: 530)
         }
         .windowResizability(.contentSize)
     }
@@ -21,6 +21,7 @@ struct MainView: View {
     @State private var selectedFormat = "TXT"
     @State private var language = "Русский"
     @State private var selectedEngine = "GigaAM"
+    @State private var includeSummary = true
     @State private var process: Process?
     @State private var resultURL: URL?
     @State private var errorMessage: String?
@@ -79,6 +80,11 @@ struct MainView: View {
                     }.labelsHidden().frame(width: 150)
                 }
             }
+
+            Toggle("Добавить краткое содержание (локальная нейросеть)", isOn: $includeSummary)
+                .toggleStyle(.checkbox)
+            Text("Qwen3 работает на этом Mac; содержание аудио никуда не отправляется.")
+                .font(.system(size: 11)).foregroundStyle(.tertiary)
 
             HStack(spacing: 10) {
                 if progress { ProgressView().controlSize(.small) }
@@ -144,11 +150,13 @@ struct MainView: View {
         let files = selectedFiles
         let format = selectedFormat
         let engine = selectedEngine
+        let makeSummary = includeSummary
         let lang = language == "Русский" ? "ru" : "auto"
         status = "Подготовка аудио…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 var last: URL?
+                var summaryFailed = false
                 for (index, input) in files.enumerated() {
                     DispatchQueue.main.async {
                         status = "Файл \(index + 1) из \(files.count): подготовка аудио…"
@@ -156,16 +164,30 @@ struct MainView: View {
                     let output = try Self.runTranscription(input: input, language: lang, engine: engine, app: Bundle.main.bundleURL) { proc in
                         DispatchQueue.main.async { process = proc }
                     }
+                    var finalOutput = output
+                    if makeSummary {
+                        DispatchQueue.main.async { status = "Файл \(index + 1) из \(files.count): готовлю краткое содержание локальной нейросетью…" }
+                        do {
+                            let summary = try Self.makeSummary(output, app: Bundle.main.bundleURL) { proc in
+                                DispatchQueue.main.async { process = proc }
+                            }
+                            finalOutput = "КРАТКОЕ СОДЕРЖАНИЕ\n\(summary)\n\nРАСШИФРОВКА С ТАЙМКОДАМИ\n\(output)"
+                        } catch {
+                            summaryFailed = true
+                        }
+                    }
                     let destination = input.deletingPathExtension().appendingPathExtension(format.lowercased() == "txt" ? "txt" : "docx")
                     if format == "TXT" {
-                        try output.write(to: destination, atomically: true, encoding: .utf8)
+                        try finalOutput.write(to: destination, atomically: true, encoding: .utf8)
                     } else {
-                        try Self.writeDocx(output, to: destination)
+                        try Self.writeDocx(finalOutput, to: destination)
                     }
                     last = destination
                 }
                 DispatchQueue.main.async {
-                    resultURL = last; status = "Расшифровка завершена"; isWorking = false; progress = false; process = nil
+                    resultURL = last
+                    status = makeSummary ? (summaryFailed ? "Расшифровка готова; краткое содержание создать не удалось" : "Расшифровка и краткое содержание готовы") : "Расшифровка завершена"
+                    isWorking = false; progress = false; process = nil
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -226,6 +248,111 @@ struct MainView: View {
         }
         flush()
         return result.joined(separator: "\n")
+    }
+
+    private static func makeSummary(_ transcript: String, app: URL, onProcess: (Process) -> Void) throws -> String {
+        let resources = app.appendingPathComponent("Contents/Resources")
+        let server = resources.appendingPathComponent("bin/llama-server")
+        let model = resources.appendingPathComponent("Qwen3-0.6B-Q8_0.gguf")
+        let port = Int.random(in: 49152...65535)
+        let process = Process()
+        process.executableURL = server
+        process.arguments = ["--model", model.path, "--ctx-size", "4096", "--n-gpu-layers", "99", "--host", "127.0.0.1", "--port", String(port), "--parallel", "1", "--alias", "timetext-summary", "--no-webui", "--log-disable"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        onProcess(process)
+        try process.run()
+        defer { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+
+        let base = URL(string: "http://127.0.0.1:\(port)")!
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            if !process.isRunning { throw NSError(domain: "TimeText", code: 3, userInfo: [NSLocalizedDescriptionKey: "Не удалось запустить локальную модель краткого содержания"]) }
+            var request = URLRequest(url: base.appendingPathComponent("health"), timeoutInterval: 2)
+            request.httpMethod = "GET"
+            if (try? Self.httpData(for: request).1) == 200 { break }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        guard Date() < deadline else { throw NSError(domain: "TimeText", code: 4, userInfo: [NSLocalizedDescriptionKey: "Локальная модель слишком долго загружалась"]) }
+
+        let chunks = Self.transcriptChunks(transcript, characterLimit: 3500)
+        var summaries: [String] = []
+        for (index, chunk) in chunks.enumerated() {
+            let instruction = "Составь краткое содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. Ответь по-русски 2–4 короткими предложениями. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
+            summaries.append(try Self.requestSummary(instruction, server: base))
+        }
+        while summaries.count > 1 {
+            var next: [String] = []
+            for group in stride(from: 0, to: summaries.count, by: 6) {
+                let part = Array(summaries[group..<min(group + 6, summaries.count)])
+                let instruction = "Сведи заметки по одной расшифровке в единое краткое содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. Пиши по-русски, ясно и компактно, 4–7 предложений. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
+                next.append(try Self.requestSummary(instruction, server: base))
+            }
+            summaries = next
+        }
+        let result = summaries.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Краткое содержание не сформировано."
+        guard !result.isEmpty else { throw NSError(domain: "TimeText", code: 5, userInfo: [NSLocalizedDescriptionKey: "Модель вернула пустое краткое содержание"]) }
+        return result
+    }
+
+    private static func transcriptChunks(_ text: String, characterLimit: Int) -> [String] {
+        let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        var chunks: [String] = []
+        var current = ""
+        for line in lines {
+            var remaining = line
+            while !remaining.isEmpty {
+                let room = max(1, characterLimit - current.count - (current.isEmpty ? 0 : 1))
+                let piece = String(remaining.prefix(room))
+                if !current.isEmpty && current.count + piece.count + 1 > characterLimit {
+                    chunks.append(current); current = ""
+                    continue
+                }
+                current += current.isEmpty ? piece : "\n\(piece)"
+                remaining = String(remaining.dropFirst(piece.count))
+                if !remaining.isEmpty { chunks.append(current); current = "" }
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks.isEmpty ? [text] : chunks
+    }
+
+    private static func requestSummary(_ prompt: String, server: URL) throws -> String {
+        var request = URLRequest(url: server.appendingPathComponent("v1/chat/completions"), timeoutInterval: 300)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "model": "timetext-summary",
+            "messages": [["role": "user", "content": prompt]],
+            "temperature": 0.2,
+            "max_tokens": 180,
+            "chat_template_kwargs": ["enable_thinking": false]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, status) = try httpData(for: request)
+        guard (200..<300).contains(status) else {
+            throw NSError(domain: "TimeText", code: status, userInfo: [NSLocalizedDescriptionKey: "Ошибка локальной модели краткого содержания (HTTP \(status))"])
+        }
+        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let choices = response?["choices"] as? [[String: Any]]
+        let message = choices?.first?["message"] as? [String: Any]
+        guard let content = message?["content"] as? String else {
+            throw NSError(domain: "TimeText", code: 6, userInfo: [NSLocalizedDescriptionKey: "Локальная модель вернула неожиданный ответ"])
+        }
+        let withoutThoughts = content.replacingOccurrences(of: "(?s)<think>.*?</think>", with: "", options: .regularExpression)
+        return withoutThoughts.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func httpData(for request: URLRequest) throws -> (Data, Int) {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<(Data, Int), Error>!
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error { result = .failure(error) }
+            else { result = .success((data ?? Data(), (response as? HTTPURLResponse)?.statusCode ?? 0)) }
+            semaphore.signal()
+        }.resume()
+        semaphore.wait()
+        return try result.get()
     }
 
     private static func execute(_ url: URL, _ args: [String], _ callback: (Process) -> Void) throws {

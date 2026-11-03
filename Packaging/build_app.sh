@@ -4,15 +4,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/ТаймТекст.app"
 CONT="$APP/Contents"
 MODEL="$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin"
+SUMMARY_MODEL="$ROOT/ThirdParty/Qwen3-0.6B-Q8_0.gguf"
 GIGAAM_MODEL="$ROOT/ThirdParty/v3_e2e_rnnt.ckpt"
 GIGAAM_TOKENIZER="$ROOT/ThirdParty/v3_e2e_rnnt_tokenizer.model"
 GIGAAM_COMMIT="7447938d791c4f3e643386ee22c33777004293a5"
 GIGAAM_RUNTIME="$ROOT/build/gigaam-dist/gigaam-transcribe"
-
-if ! command -v python3.12 >/dev/null 2>&1; then
-  echo "Для сборки GigaAM нужен Python 3.12 (brew install python@3.12)" >&2
-  exit 1
-fi
 
 if [ ! -f "$GIGAAM_MODEL" ]; then
   curl -L --fail --retry 3 -o "$GIGAAM_MODEL" https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt.ckpt
@@ -23,13 +19,22 @@ fi
 test "$(md5 -q "$GIGAAM_MODEL")" = "2730de7545ac43ad256485a462b0a27a"
 test "$(md5 -q "$GIGAAM_TOKENIZER")" = "3b3bf8370e882885d79731592fc99f98"
 
-VENV="$ROOT/build/gigaam-venv"
-if [ ! -x "$VENV/bin/pyinstaller" ]; then
-  python3.12 -m venv "$VENV"
-  "$VENV/bin/pip" install --upgrade pip
-  "$VENV/bin/pip" install "git+https://github.com/salute-developers/GigaAM.git@$GIGAAM_COMMIT" pyinstaller
+if [ ! -f "$SUMMARY_MODEL" ]; then
+  curl -L --fail --retry 3 -o "$SUMMARY_MODEL" https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
 fi
+echo "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031  $SUMMARY_MODEL" | shasum -a 256 -c -
+
+VENV="$ROOT/build/gigaam-venv"
 if [ ! -x "$GIGAAM_RUNTIME/gigaam-transcribe" ] || [ "$ROOT/Packaging/gigaam_transcribe.py" -nt "$GIGAAM_RUNTIME/gigaam-transcribe" ]; then
+  if ! command -v python3.12 >/dev/null 2>&1; then
+    echo "Для сборки GigaAM нужен Python 3.12 (brew install python@3.12)" >&2
+    exit 1
+  fi
+  if [ ! -x "$VENV/bin/pyinstaller" ]; then
+    python3.12 -m venv "$VENV"
+    "$VENV/bin/pip" install --upgrade pip
+    "$VENV/bin/pip" install "git+https://github.com/salute-developers/GigaAM.git@$GIGAAM_COMMIT" pyinstaller
+  fi
   rm -rf "$ROOT/build/gigaam-dist" "$ROOT/build/gigaam-pyinstaller"
   "$VENV/bin/pyinstaller" --clean --noconfirm --onedir \
     --name gigaam-transcribe \
@@ -48,7 +53,10 @@ rm -rf "$APP"
 mkdir -p "$CONT/MacOS" "$CONT/Resources/bin" "$CONT/Resources/Frameworks" "$CONT/Resources/GigaAM" "$CONT/Resources/GigaAMRuntime"
 cp /opt/homebrew/bin/ffmpeg "$CONT/Resources/bin/ffmpeg"
 cp /opt/homebrew/bin/whisper-cli "$CONT/Resources/bin/whisper-cli"
+cp /opt/homebrew/bin/llama-server "$CONT/Resources/bin/llama-server"
 cp "$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin" "$CONT/Resources/ggml-large-v3-turbo-q5_0.bin"
+cp "$SUMMARY_MODEL" "$CONT/Resources/Qwen3-0.6B-Q8_0.gguf"
+cp "$ROOT/Assets/AppIcon.icns" "$CONT/Resources/AppIcon.icns"
 cp "$GIGAAM_MODEL" "$CONT/Resources/GigaAM/v3_e2e_rnnt.ckpt"
 cp "$GIGAAM_TOKENIZER" "$CONT/Resources/GigaAM/v3_e2e_rnnt_tokenizer.model"
 ditto "$GIGAAM_RUNTIME" "$CONT/Resources/GigaAMRuntime"
@@ -60,15 +68,30 @@ cp /opt/homebrew/Cellar/whisper.cpp/1.9.5/LICENSE "$CONT/Resources/Licenses/whis
 cp /opt/homebrew/Cellar/ggml/0.26.0/LICENSE "$CONT/Resources/Licenses/ggml-MIT.txt"
 cp "$ROOT/LICENSE" "$CONT/Resources/Licenses/ТаймТекст-MIT.txt"
 curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/GigaAM-MIT.txt" https://raw.githubusercontent.com/salute-developers/GigaAM/$GIGAAM_COMMIT/LICENSE
-TORCH_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torch-*.dist-info/licenses' -print -quit)"
-TORCHAUDIO_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torchaudio-*.dist-info/licenses' -print -quit)"
-ditto "$TORCH_LICENSES" "$CONT/Resources/Licenses/PyTorch"
-ditto "$TORCHAUDIO_LICENSES" "$CONT/Resources/Licenses/TorchAudio"
+TORCH_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torch-*.dist-info/licenses' -print -quit 2>/dev/null || true)"
+TORCHAUDIO_LICENSES="$(find "$VENV/lib/python3.12/site-packages" -maxdepth 2 -type d -path '*/torchaudio-*.dist-info/licenses' -print -quit 2>/dev/null || true)"
+if [ -n "$TORCH_LICENSES" ]; then
+  ditto "$TORCH_LICENSES" "$CONT/Resources/Licenses/PyTorch"
+else
+  ditto "/Applications/ТаймТекст.app/Contents/Resources/Licenses/PyTorch" "$CONT/Resources/Licenses/PyTorch"
+fi
+if [ -n "$TORCHAUDIO_LICENSES" ]; then
+  ditto "$TORCHAUDIO_LICENSES" "$CONT/Resources/Licenses/TorchAudio"
+else
+  ditto "/Applications/ТаймТекст.app/Contents/Resources/Licenses/TorchAudio" "$CONT/Resources/Licenses/TorchAudio"
+fi
+curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/Qwen3-Apache-2.0.txt" https://www.apache.org/licenses/LICENSE-2.0.txt
+cat > "$CONT/Resources/Licenses/Qwen3-Model-Notice.txt" <<'NOTICE'
+Copyright 2024-2025 Alibaba Cloud. Qwen3-0.6B-GGUF, Q8_0 quantization, is licensed under Apache-2.0.
+Model repository: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
+NOTICE
 cat > "$CONT/Resources/Licenses/ThirdPartyNotices.txt" <<'NOTICE'
-ТаймТекст включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
+ТаймТекст включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, llama.cpp 0.6.0_1, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
+Для краткого содержания локально используется Qwen3-0.6B-Q8_0 от Alibaba Cloud (Apache-2.0).
 Исходный код FFmpeg: https://ffmpeg.org/download.html
 Исходный код whisper.cpp: https://github.com/ggml-org/whisper.cpp
 Исходный код ggml: https://github.com/ggml-org/ggml
+Исходный код llama.cpp: https://github.com/ggml-org/llama.cpp
 Исходный код и модель GigaAM: https://github.com/salute-developers/GigaAM
 Проверенная ревизия GigaAM: https://github.com/salute-developers/GigaAM/tree/7447938d791c4f3e643386ee22c33777004293a5
 Модель GigaAM-v3 e2e-RNNT: https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/v3_e2e_rnnt.ckpt
@@ -82,7 +105,7 @@ import os, re, shutil, subprocess, sys
 from pathlib import Path
 contents = Path(sys.argv[1])
 fw = contents / "Resources/Frameworks"
-todo = [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli"]
+todo = [contents / "Resources/bin/ffmpeg", contents / "Resources/bin/whisper-cli", contents / "Resources/bin/llama-server"]
 seen = set()
 
 def out(*args):
@@ -149,9 +172,10 @@ cat > "$CONT/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>ru.seruyvodoley.timetext</string>
 <key>CFBundleName</key><string>ТаймТекст</string>
 <key>CFBundleDisplayName</key><string>ТаймТекст</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>1.2.0</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>

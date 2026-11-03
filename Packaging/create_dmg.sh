@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/ТаймТекст.app"
 STAGE="$ROOT/build/dmg-root"
-OUT="$ROOT/build/ТаймТекст-1.1.0-arm64.dmg"
+OUT="$ROOT/build/ТаймТекст-1.2.0-arm64.dmg"
 rm -rf "$STAGE" "$OUT"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/ТаймТекст.app"

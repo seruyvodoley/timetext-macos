@@ -2,4 +2,5 @@ build/
 ThirdParty/*.bin
 ThirdParty/*.ckpt
 ThirdParty/*.model
+ThirdParty/*.gguf
 .DS_Store
