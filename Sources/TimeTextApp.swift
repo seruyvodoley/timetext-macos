@@ -216,7 +216,7 @@ struct MainView: View {
                     Text("GigaAM · русский").tag("GigaAM")
                     Text("Whisper · разные языки").tag("Whisper")
                 }
-                .frame(width: 190).disabled(isWorking)
+                .frame(width: 250).disabled(isWorking)
                 if selectedEngine == "Whisper" {
                     Picker("Язык", selection: $language) {
                         Text("Русский").tag("Русский")
