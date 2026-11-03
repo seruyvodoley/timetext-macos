@@ -334,7 +334,7 @@ struct MainView: View {
                     }
                 }
             }
-            .frame(minHeight: 170, maxHeight: .infinity)
+            .frame(minHeight: 120, maxHeight: .infinity)
             .background(.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.opacity(0.08), lineWidth: 1))
         }
