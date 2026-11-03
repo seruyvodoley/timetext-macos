@@ -24,6 +24,10 @@ struct MainView: View {
     @State private var selectedEngine = "GigaAM"
     @State private var includeTranscript = true
     @State private var includeSummary = true
+    @State private var summaryStyle = "Тезисы"
+    @State private var summaryLength = "Короткая"
+    @State private var summaryTimestamps = false
+    @State private var summaryPreview = ""
     @State private var process: Process?
     @State private var resultFiles: [URL] = []
     @State private var errorMessage: String?
@@ -205,6 +209,25 @@ struct MainView: View {
                     Text("отдельный TXT-файл")
                         .font(.system(size: 10, weight: .medium)).foregroundStyle(ink.opacity(0.52))
                 }
+                if includeSummary {
+                    Rectangle().fill(ink.opacity(0.08)).frame(height: 1).padding(.vertical, 10)
+                    HStack(spacing: 12) {
+                        Picker("Вид", selection: $summaryStyle) {
+                            Text("Тезисы").tag("Тезисы")
+                            Text("Связный текст").tag("Связный текст")
+                            Text("Задачи и решения").tag("Задачи и решения")
+                        }
+                        .frame(maxWidth: .infinity).disabled(isWorking)
+                        Picker("Объём", selection: $summaryLength) {
+                            Text("Короткая").tag("Короткая")
+                            Text("Подробная").tag("Подробная")
+                        }
+                        .frame(width: 170).disabled(isWorking)
+                    }
+                    Toggle("Сохранить таймкоды в выжимке", isOn: $summaryTimestamps)
+                        .toggleStyle(.checkbox).font(.system(size: 11, weight: .medium))
+                        .disabled(isWorking).padding(.top, 8)
+                }
             }
             .padding(13)
             .background(.white, in: RoundedRectangle(cornerRadius: 12))
@@ -227,7 +250,9 @@ struct MainView: View {
                 Spacer(minLength: 0)
             }
 
-            Spacer(minLength: 18)
+            summaryPreviewPanel
+                .frame(maxHeight: .infinity)
+                .padding(.top, 20)
 
             if !resultFiles.isEmpty {
                 Rectangle().fill(ink.opacity(0.12)).frame(height: 1).padding(.bottom, 13)
@@ -270,6 +295,43 @@ struct MainView: View {
             .padding(.top, 14)
         }
         .padding(.horizontal, 28).padding(.top, 27).padding(.bottom, 22)
+    }
+
+    private var summaryPreviewPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                sectionTitle("Предпросмотр выжимки", icon: "text.alignleft")
+                Spacer()
+                if !summaryPreview.isEmpty {
+                    Text("ПЕРВЫЙ РЕЗУЛЬТАТ")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .tracking(0.8).foregroundStyle(ink.opacity(0.38))
+                }
+            }
+            ScrollView {
+                Group {
+                    if summaryPreview.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Image(systemName: includeSummary ? "sparkles" : "text.alignleft")
+                                .font(.system(size: 17, weight: .light)).foregroundStyle(sea)
+                            Text(includeSummary ? "Здесь появится готовая выжимка" : "Выжимка отключена")
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(ink.opacity(0.76))
+                            Text(includeSummary ? "Выберите вид и объём выше. После обработки текст можно будет открыть отдельно и сохранить в выбранную папку." : "Включите краткую выжимку, чтобы создавать отдельный текстовый файл с содержанием записи.")
+                                .font(.system(size: 10)).foregroundStyle(ink.opacity(0.52)).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(15)
+                    } else {
+                        Text(summaryPreview)
+                            .font(.system(size: 12)).foregroundStyle(ink.opacity(0.84))
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(15)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .background(.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(ink.opacity(0.08), lineWidth: 1))
+        }
     }
 
     private var waveformMark: some View {
@@ -336,12 +398,15 @@ struct MainView: View {
 
     private func transcribe() {
         guard !selectedFiles.isEmpty, includeTranscript || includeSummary else { return }
-        isWorking = true; progress = true; resultFiles = []
+        isWorking = true; progress = true; resultFiles = []; summaryPreview = ""
         let files = selectedFiles
         let format = selectedFormat
         let engine = selectedEngine
         let saveTranscript = includeTranscript
         let makeSummary = includeSummary
+        let chosenSummaryStyle = summaryStyle
+        let chosenSummaryLength = summaryLength
+        let chosenSummaryTimestamps = summaryTimestamps
         let chosenFolder = outputFolderPath
         let lang = language == "Русский" ? "ru" : "auto"
         status = "Подготовка аудио…"
@@ -369,12 +434,13 @@ struct MainView: View {
                     if makeSummary {
                         DispatchQueue.main.async { status = "Файл \(index + 1) из \(files.count): создаю отдельную выжимку…" }
                         do {
-                            let summary = try Self.makeSummary(output, app: Bundle.main.bundleURL) { proc in
+                            let summary = try Self.makeSummary(output, style: chosenSummaryStyle, length: chosenSummaryLength, timestamps: chosenSummaryTimestamps, app: Bundle.main.bundleURL) { proc in
                                 DispatchQueue.main.async { process = proc }
                             }
                             let summaryURL = Self.uniqueOutputURL(directory: destinationDirectory, baseName: "\(baseName)_выжимка", extension: "txt")
                             try summary.write(to: summaryURL, atomically: true, encoding: .utf8)
                             outputs.append(summaryURL)
+                            DispatchQueue.main.async { summaryPreview = summary }
                         } catch {
                             summaryFailed = true
                         }
@@ -427,6 +493,7 @@ struct MainView: View {
         if engine == "GigaAM" {
             let gigaam = resources.appendingPathComponent("GigaAMRuntime/gigaam-transcribe")
             let bundledModel = resources.appendingPathComponent("GigaAM")
+            try prepareGigaAMModelCache(bundledModel: bundledModel)
             try execute(gigaam, ["--input", audio.path, "--output", base.path + ".srt", "--model-dir", bundledModel.path], onProcess)
             return try parseSRT(at: URL(fileURLWithPath: base.path + ".srt"))
         }
@@ -458,7 +525,20 @@ struct MainView: View {
         return result.joined(separator: "\n")
     }
 
-    private static func makeSummary(_ transcript: String, app: URL, onProcess: (Process) -> Void) throws -> String {
+    private static func prepareGigaAMModelCache(bundledModel: URL) throws {
+        let cache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/TimeText/GigaAM", isDirectory: true)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        for name in ["v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"] {
+            let cached = cache.appendingPathComponent(name)
+            let values = try? cached.resourceValues(forKeys: [.isSymbolicLinkKey])
+            guard values?.isSymbolicLink == true else { continue }
+            // Only remove the app-managed symlink; never touch a real user file.
+            try FileManager.default.removeItem(at: cached)
+        }
+    }
+
+    private static func makeSummary(_ transcript: String, style: String, length: String, timestamps: Bool, app: URL, onProcess: (Process) -> Void) throws -> String {
         let resources = app.appendingPathComponent("Contents/Resources")
         let server = resources.appendingPathComponent("bin/llama-server")
         let model = resources.appendingPathComponent("Qwen3-0.6B-Q8_0.gguf")
@@ -484,17 +564,25 @@ struct MainView: View {
         guard Date() < deadline else { throw NSError(domain: "TimeText", code: 4, userInfo: [NSLocalizedDescriptionKey: "Локальная модель слишком долго загружалась"]) }
 
         let chunks = Self.transcriptChunks(transcript, characterLimit: 3500)
+        let formatInstruction: String
+        switch style {
+        case "Связный текст": formatInstruction = "Оформи результат связным абзацем, без маркированного списка."
+        case "Задачи и решения": formatInstruction = "Если в тексте есть задачи, решения, договорённости или ответственные, выдели их отдельными пунктами. Не придумывай отсутствующие задачи."
+        default: formatInstruction = "Оформи результат короткими тезисами с маркерами."
+        }
+        let sizeInstruction = length == "Подробная" ? "Дай содержательное изложение на 6–10 предложений, сохрани важные детали и оговорки." : "Дай короткое изложение на 2–4 коротких предложения."
+        let timeInstruction = timestamps ? "Сохраняй исходные таймкоды рядом с соответствующими мыслями, если они присутствуют во фрагменте. Не придумывай таймкоды." : "Не включай таймкоды в результат."
         var summaries: [String] = []
         for (index, chunk) in chunks.enumerated() {
-            let instruction = "Составь краткое содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. Ответь по-русски 2–4 короткими предложениями. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
-            summaries.append(try Self.requestSummary(instruction, server: base))
+            let instruction = "Составь \(length.lowercased()) содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Ответь по-русски. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
+            summaries.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 360 : 180))
         }
         while summaries.count > 1 {
             var next: [String] = []
             for group in stride(from: 0, to: summaries.count, by: 6) {
                 let part = Array(summaries[group..<min(group + 6, summaries.count)])
-                let instruction = "Сведи заметки по одной расшифровке в единое краткое содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. Пиши по-русски, ясно и компактно, 4–7 предложений. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
-                next.append(try Self.requestSummary(instruction, server: base))
+                let instruction = "Сведи заметки по одной расшифровке в единое \(length.lowercased()) содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Пиши по-русски. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
+                next.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 420 : 220))
             }
             summaries = next
         }
@@ -525,7 +613,7 @@ struct MainView: View {
         return chunks.isEmpty ? [text] : chunks
     }
 
-    private static func requestSummary(_ prompt: String, server: URL) throws -> String {
+    private static func requestSummary(_ prompt: String, server: URL, maxTokens: Int) throws -> String {
         var request = URLRequest(url: server.appendingPathComponent("v1/chat/completions"), timeoutInterval: 300)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -533,7 +621,7 @@ struct MainView: View {
             "model": "timetext-summary",
             "messages": [["role": "user", "content": prompt]],
             "temperature": 0.2,
-            "max_tokens": 180,
+            "max_tokens": maxTokens,
             "chat_template_kwargs": ["enable_thinking": false]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -571,7 +659,16 @@ struct MainView: View {
         if p.terminationStatus != 0 {
             let data = err.fileHandleForReading.readDataToEndOfFile()
             let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw NSError(domain: "TimeText", code: Int(p.terminationStatus), userInfo: [NSLocalizedDescriptionKey: detail.isEmpty ? "Ошибка обработки медиафайла (код \(p.terminationStatus))" : String(detail.suffix(1200))])
+            let cleaned = detail.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let message: String
+            if let traceback = cleaned.last(where: { $0.contains("Error:") || $0.contains("Exception:") || $0.contains("Error ") }) {
+                message = String(traceback.suffix(400))
+            } else if let lastLine = cleaned.last {
+                message = String(lastLine.suffix(400))
+            } else {
+                message = "Ошибка обработки медиафайла (код \(p.terminationStatus))"
+            }
+            throw NSError(domain: "TimeText", code: Int(p.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
 
