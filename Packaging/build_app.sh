@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/TimeText.app"
 CONT="$APP/Contents"
 MODEL="$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin"
-SUMMARY_MODEL="$ROOT/ThirdParty/Qwen3-0.6B-Q8_0.gguf"
+SUMMARY_MODEL="$ROOT/ThirdParty/Qwen2.5-1.5B-Instruct-Q3_K_M.gguf"
 GIGAAM_MODEL="$ROOT/ThirdParty/v3_e2e_rnnt.ckpt"
 GIGAAM_TOKENIZER="$ROOT/ThirdParty/v3_e2e_rnnt_tokenizer.model"
 GIGAAM_COMMIT="7447938d791c4f3e643386ee22c33777004293a5"
@@ -20,9 +20,9 @@ test "$(md5 -q "$GIGAAM_MODEL")" = "2730de7545ac43ad256485a462b0a27a"
 test "$(md5 -q "$GIGAAM_TOKENIZER")" = "3b3bf8370e882885d79731592fc99f98"
 
 if [ ! -f "$SUMMARY_MODEL" ]; then
-  curl -L --fail --retry 3 -o "$SUMMARY_MODEL" https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
+  curl -L --fail --retry 3 -o "$SUMMARY_MODEL" https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q3_k_m.gguf
 fi
-echo "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031  $SUMMARY_MODEL" | shasum -a 256 -c -
+echo "58cb5c05ecef48e82961f1a2be6544145ea26136f69dddda4bbbd092f0e4b993  $SUMMARY_MODEL" | shasum -a 256 -c -
 
 VENV="$ROOT/build/gigaam-venv"
 if [ ! -x "$GIGAAM_RUNTIME/gigaam-transcribe" ] || [ "$ROOT/Packaging/gigaam_transcribe.py" -nt "$GIGAAM_RUNTIME/gigaam-transcribe" ]; then
@@ -55,7 +55,8 @@ cp /opt/homebrew/bin/ffmpeg "$CONT/Resources/bin/ffmpeg"
 cp /opt/homebrew/bin/whisper-cli "$CONT/Resources/bin/whisper-cli"
 cp /opt/homebrew/bin/llama-server "$CONT/Resources/bin/llama-server"
 cp "$ROOT/ThirdParty/ggml-large-v3-turbo-q5_0.bin" "$CONT/Resources/ggml-large-v3-turbo-q5_0.bin"
-cp "$SUMMARY_MODEL" "$CONT/Resources/Qwen3-0.6B-Q8_0.gguf"
+cp "$SUMMARY_MODEL" "$CONT/Resources/Qwen2.5-1.5B-Instruct-Q3_K_M.gguf"
+rm -f "$ROOT/ThirdParty/Qwen3-0.6B-Q8_0.gguf"
 cp "$ROOT/Assets/AppIcon.icns" "$CONT/Resources/AppIcon.icns"
 cp "$GIGAAM_MODEL" "$CONT/Resources/GigaAM/v3_e2e_rnnt.ckpt"
 cp "$GIGAAM_TOKENIZER" "$CONT/Resources/GigaAM/v3_e2e_rnnt_tokenizer.model"
@@ -84,14 +85,15 @@ else
   [ -d "$TORCHAUDIO_FALLBACK" ] || TORCHAUDIO_FALLBACK="/Applications/ТаймТекст.app/Contents/Resources/Licenses/TorchAudio"
   ditto "$TORCHAUDIO_FALLBACK" "$CONT/Resources/Licenses/TorchAudio"
 fi
-curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/Qwen3-Apache-2.0.txt" https://www.apache.org/licenses/LICENSE-2.0.txt
-cat > "$CONT/Resources/Licenses/Qwen3-Model-Notice.txt" <<'NOTICE'
-Copyright 2024-2025 Alibaba Cloud. Qwen3-0.6B-GGUF, Q8_0 quantization, is licensed under Apache-2.0.
-Model repository: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
+curl -L --fail --retry 3 -o "$CONT/Resources/Licenses/Qwen-Apache-2.0.txt" https://www.apache.org/licenses/LICENSE-2.0.txt
+cat > "$CONT/Resources/Licenses/Qwen2.5-Model-Notice.txt" <<'NOTICE'
+Copyright 2024 Alibaba Cloud. Qwen2.5-1.5B-Instruct, Q3_K_M GGUF quantization, is licensed under Apache-2.0.
+Model repository: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct
+GGUF repository: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF
 NOTICE
 cat > "$CONT/Resources/Licenses/ThirdPartyNotices.txt" <<'NOTICE'
 TimeText включает FFmpeg 9.0.2_1, whisper.cpp 1.9.5, llama.cpp 0.6.0_1, ggml 0.26.0, PyTorch и GigaAM-v3 e2e-RNNT от SberDevices.
-Для краткого содержания локально используется Qwen3-0.6B-Q8_0 от Alibaba Cloud (Apache-2.0).
+Для краткого содержания локально используется Qwen2.5-1.5B-Instruct Q3_K_M от Alibaba Cloud (Apache-2.0).
 Исходный код FFmpeg: https://ffmpeg.org/download.html
 Исходный код whisper.cpp: https://github.com/ggml-org/whisper.cpp
 Исходный код ggml: https://github.com/ggml-org/ggml
@@ -206,6 +208,9 @@ PLIST
 printf 'APPL????' > "$CONT/PkgInfo"
 swiftc -parse-as-library -O -target arm64-apple-macosx27.0 "$ROOT/Sources/TimeTextApp.swift" -o "$CONT/MacOS/TimeText" -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers
 chmod +x "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/MacOS/TimeText"
+find "$CONT/Resources" -type f -exec chmod u+w {} +
+find "$CONT/Resources" -type f \( -name '*.dylib' -o -name '*.so' \) -exec strip -S {} +
+strip -S "$CONT/Resources/bin/ffmpeg" "$CONT/Resources/bin/whisper-cli" "$CONT/Resources/bin/llama-server" "$CONT/Resources/GigaAMRuntime/gigaam-transcribe" "$CONT/MacOS/TimeText"
 find "$CONT/Resources/bin" "$CONT/Resources/Frameworks" "$CONT/Resources/GigaAMRuntime" -type f \( -name '*.dylib' -o -name '*.so' -o -perm -111 \) -print0 | while IFS= read -r -d '' ITEM; do
   codesign --force --sign - "$ITEM"
 done

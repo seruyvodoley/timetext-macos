@@ -28,6 +28,12 @@ struct MainView: View {
     @State private var summaryLength = "Короткая"
     @State private var summaryTimestamps = false
     @State private var summaryPreview = ""
+    @State private var previewTranscript: String?
+    @State private var previewSummaryURL: URL?
+    @State private var isRefreshingSummary = false
+    @State private var summaryRefreshPending = false
+    @State private var summaryRefreshToken = UUID()
+    @State private var summaryRefreshWorkItem: DispatchWorkItem?
     @State private var process: Process?
     @State private var resultFiles: [URL] = []
     @State private var errorMessage: String?
@@ -38,6 +44,7 @@ struct MainView: View {
     private let paper = Color(red: 0.96, green: 0.975, blue: 0.98)
     private let sea = Color(red: 0.19, green: 0.68, blue: 0.59)
     private let amber = Color(red: 0.91, green: 0.65, blue: 0.31)
+    private let summaryQueue = DispatchQueue(label: "TimeText.summary", qos: .userInitiated)
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,6 +65,10 @@ struct MainView: View {
         .alert("Не удалось расшифровать", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("Закрыть", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
+        .onChange(of: summaryStyle) { _, _ in scheduleSummaryRefresh() }
+        .onChange(of: summaryLength) { _, _ in scheduleSummaryRefresh() }
+        .onChange(of: summaryTimestamps) { _, _ in scheduleSummaryRefresh() }
+        .onChange(of: includeSummary) { _, enabled in if enabled { scheduleSummaryRefresh() } }
     }
 
     private var queuePanel: some View {
@@ -292,6 +303,8 @@ struct MainView: View {
             Spacer(minLength: 8)
             if isWorking {
                 Button("Отменить") { cancel() }.buttonStyle(.bordered).controlSize(.regular)
+            } else if isRefreshingSummary {
+                Button("Отменить обновление") { cancelSummaryRefresh() }.buttonStyle(.bordered).controlSize(.regular)
             } else {
                 Button(action: transcribe) {
                     Label("Обработать \(selectedFiles.count)", systemImage: "waveform.and.mic")
@@ -325,7 +338,17 @@ struct MainView: View {
             }
             ScrollView {
                 Group {
-                    if summaryPreview.isEmpty {
+                    if !includeSummary {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Image(systemName: "text.alignleft")
+                                .font(.system(size: 17, weight: .light)).foregroundStyle(sea)
+                            Text("Выжимка отключена")
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(ink.opacity(0.76))
+                            Text("Включите её выше, чтобы создать или обновить отдельный TXT-файл.")
+                                .font(.system(size: 10)).foregroundStyle(ink.opacity(0.52))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(15)
+                    } else if summaryPreview.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Image(systemName: includeSummary ? "sparkles" : "text.alignleft")
                                 .font(.system(size: 17, weight: .light)).foregroundStyle(sea)
@@ -412,8 +435,11 @@ struct MainView: View {
     }
 
     private func transcribe() {
-        guard !selectedFiles.isEmpty, includeTranscript || includeSummary else { return }
+        guard !selectedFiles.isEmpty, includeTranscript || includeSummary, !isRefreshingSummary else { return }
+        summaryRefreshToken = UUID()
+        summaryRefreshWorkItem?.cancel()
         isWorking = true; progress = true; resultFiles = []; summaryPreview = ""
+        previewTranscript = nil; previewSummaryURL = nil
         let files = selectedFiles
         let format = selectedFormat
         let engine = selectedEngine
@@ -455,7 +481,11 @@ struct MainView: View {
                             let summaryURL = Self.uniqueOutputURL(directory: destinationDirectory, baseName: "\(baseName)_выжимка", extension: "txt")
                             try summary.write(to: summaryURL, atomically: true, encoding: .utf8)
                             outputs.append(summaryURL)
-                            DispatchQueue.main.async { summaryPreview = summary }
+                            DispatchQueue.main.async {
+                                summaryPreview = summary
+                                previewTranscript = output
+                                previewSummaryURL = summaryURL
+                            }
                         } catch {
                             summaryFailed = true
                         }
@@ -466,6 +496,10 @@ struct MainView: View {
                     if summaryFailed { status = outputs.isEmpty ? "Выжимку создать не удалось" : "Файлы готовы; для части записей выжимка не создана" }
                     else { status = "Готово · сохранено файлов: \(outputs.count)" }
                     isWorking = false; progress = false; process = nil
+                    if summaryRefreshPending {
+                        summaryRefreshPending = false
+                        scheduleSummaryRefresh()
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -490,6 +524,69 @@ struct MainView: View {
     private func cancel() {
         process?.terminate()
         isWorking = false; progress = false; status = "Операция отменена"
+    }
+
+    private func scheduleSummaryRefresh() {
+        guard includeSummary, let transcript = previewTranscript, !transcript.isEmpty else { return }
+        if isWorking {
+            summaryRefreshPending = true
+            return
+        }
+        if isRefreshingSummary { process?.terminate() }
+        summaryRefreshWorkItem?.cancel()
+        let token = UUID()
+        summaryRefreshToken = token
+        isRefreshingSummary = true
+        progress = true
+        status = "Параметры изменены · обновляю выжимку…"
+        let style = summaryStyle
+        let length = summaryLength
+        let timestamps = summaryTimestamps
+        let item = DispatchWorkItem {
+            guard summaryRefreshToken == token else { return }
+            summaryQueue.async {
+                do {
+                    let refreshed = try Self.makeSummary(transcript, style: style, length: length, timestamps: timestamps, app: Bundle.main.bundleURL) { proc in
+                        DispatchQueue.main.async { if summaryRefreshToken == token { process = proc } }
+                    }
+                    DispatchQueue.main.async {
+                        guard summaryRefreshToken == token else { return }
+                        summaryPreview = refreshed
+                        do {
+                            if let previewSummaryURL {
+                                try refreshed.write(to: previewSummaryURL, atomically: true, encoding: .utf8)
+                            }
+                            status = "Выжимка обновлена · файл тоже обновлён"
+                        } catch {
+                            status = "Предпросмотр обновлён, но TXT-файл сохранить не удалось"
+                        }
+                        isRefreshingSummary = false
+                        progress = false
+                        process = nil
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        guard summaryRefreshToken == token else { return }
+                        isRefreshingSummary = false
+                        progress = false
+                        process = nil
+                        status = "Не удалось обновить выжимку: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+        summaryRefreshWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: item)
+    }
+
+    private func cancelSummaryRefresh() {
+        summaryRefreshToken = UUID()
+        summaryRefreshWorkItem?.cancel()
+        process?.terminate()
+        isRefreshingSummary = false
+        progress = false
+        process = nil
+        status = "Обновление выжимки отменено"
     }
 
     private static func runTranscription(input: URL, language: String, engine: String, app: URL, onProcess: (Process) -> Void) throws -> String {
@@ -556,7 +653,7 @@ struct MainView: View {
     private static func makeSummary(_ transcript: String, style: String, length: String, timestamps: Bool, app: URL, onProcess: (Process) -> Void) throws -> String {
         let resources = app.appendingPathComponent("Contents/Resources")
         let server = resources.appendingPathComponent("bin/llama-server")
-        let model = resources.appendingPathComponent("Qwen3-0.6B-Q8_0.gguf")
+        let model = resources.appendingPathComponent("Qwen2.5-1.5B-Instruct-Q3_K_M.gguf")
         let port = Int.random(in: 49152...65535)
         let process = Process()
         process.executableURL = server
@@ -581,24 +678,24 @@ struct MainView: View {
         let chunks = Self.transcriptChunks(transcript, characterLimit: 3500)
         let formatInstruction: String
         switch style {
-        case "Связный текст": formatInstruction = "Оформи результат связным абзацем, без маркированного списка."
-        case "Задачи и решения": formatInstruction = "Если в тексте есть задачи, решения, договорённости или ответственные, выдели их отдельными пунктами. Не придумывай отсутствующие задачи."
-        default: formatInstruction = "Оформи результат короткими тезисами с маркерами."
+        case "Связный текст": formatInstruction = "Оформи результат одним связным абзацем, без маркированного списка. Объедини связанные мысли, не пересказывай каждую строку отдельно."
+        case "Задачи и решения": formatInstruction = "Выдели только явно названные задачи и решения. Объедини повторы. Если задач или решений в исходнике нет, верни пустой список для соответствующей категории. Не придумывай действия и ответственных."
+        default: formatInstruction = "Оформи результат короткими тезисами. Объедини связанные мысли и не пересказывай каждую строку отдельно. Для короткого объёма оставь не более 4 пунктов, для подробного — не более 7."
         }
         let sizeInstruction = length == "Подробная" ? "Дай содержательное изложение на 6–10 предложений, сохрани важные детали и оговорки." : "Дай короткое изложение на 2–4 коротких предложения."
         let lengthDescriptor = length == "Подробная" ? "подробное" : "краткое"
         let timeInstruction = timestamps ? "Сохраняй исходные таймкоды рядом с соответствующими мыслями, если они присутствуют во фрагменте. Не придумывай таймкоды." : "Не включай таймкоды в результат."
         var summaries: [String] = []
         for (index, chunk) in chunks.enumerated() {
-            let instruction = "Составь \(lengthDescriptor) содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Ответь по-русски. Не выводи рассуждения. /no_think\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
-            summaries.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 360 : 180))
+            let instruction = "Составь \(lengthDescriptor) содержание фрагмента русской расшифровки. Выдели только ключевые темы и факты; не добавляй сведений, которых нет в тексте. Если фрагмент неполный или неразборчивый, не додумывай. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Ответь по-русски. Не выводи рассуждения.\n\nФрагмент \(index + 1) из \(chunks.count):\n\(chunk)"
+            summaries.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 420 : 240, style: style, length: length))
         }
         while summaries.count > 1 {
             var next: [String] = []
             for group in stride(from: 0, to: summaries.count, by: 6) {
                 let part = Array(summaries[group..<min(group + 6, summaries.count)])
-                let instruction = "Сведи заметки по одной расшифровке в единое \(lengthDescriptor) содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Пиши по-русски. Не выводи рассуждения. /no_think\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
-                next.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 420 : 220))
+                let instruction = "Сведи заметки по одной расшифровке в единое \(lengthDescriptor) содержание. Сохрани главные темы, факты, выводы и важные оговорки; не добавляй ничего нового. \(formatInstruction) \(sizeInstruction) \(timeInstruction) Пиши по-русски. Не выводи рассуждения.\n\nЗаметки:\n\(part.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))"
+                next.append(try Self.requestSummary(instruction, server: base, maxTokens: length == "Подробная" ? 480 : 280, style: style, length: length))
             }
             summaries = next
         }
@@ -629,16 +726,33 @@ struct MainView: View {
         return chunks.isEmpty ? [text] : chunks
     }
 
-    private static func requestSummary(_ prompt: String, server: URL, maxTokens: Int) throws -> String {
+    private static func requestSummary(_ prompt: String, server: URL, maxTokens: Int, style: String, length: String) throws -> String {
         var request = URLRequest(url: server.appendingPathComponent("v1/chat/completions"), timeoutInterval: 300)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let systemPrompt = "Ты — редактор расшифровок. Излагай только то, что прямо сказано в источнике. Если фраза явно повреждена распознаванием речи, исключи её; не пытайся восстановить по смыслу. Не исправляй и не угадывай неразборчивые слова, названия и числа. Не добавляй общие знания, выводы или детали от себя. При сомнении опускай сомнительное. Сохраняй точные числовые значения и смысловые оговорки."
+        let itemLimit = length == "Подробная" ? 7 : 4
+        let listSchema: [String: Any] = ["type": "array", "items": ["type": "string"], "maxItems": itemLimit]
+        let properties: [String: Any]
+        let required: [String]
+        switch style {
+        case "Связный текст":
+            properties = ["summary": ["type": "string"]]
+            required = ["summary"]
+        case "Задачи и решения":
+            properties = ["tasks": listSchema, "decisions": listSchema]
+            required = ["tasks", "decisions"]
+        default:
+            properties = ["points": listSchema]
+            required = ["points"]
+        }
+        let schema: [String: Any] = ["type": "object", "properties": properties, "required": required, "additionalProperties": false]
         let body: [String: Any] = [
             "model": "timetext-summary",
-            "messages": [["role": "user", "content": prompt]],
+            "messages": [["role": "system", "content": systemPrompt], ["role": "user", "content": prompt]],
             "temperature": 0.2,
             "max_tokens": maxTokens,
-            "chat_template_kwargs": ["enable_thinking": false]
+            "response_format": ["type": "json_schema", "json_schema": ["name": "summary", "schema": schema]]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, status) = try httpData(for: request)
@@ -651,8 +765,22 @@ struct MainView: View {
         guard let content = message?["content"] as? String else {
             throw NSError(domain: "TimeText", code: 6, userInfo: [NSLocalizedDescriptionKey: "Локальная модель вернула неожиданный ответ"])
         }
-        let withoutThoughts = content.replacingOccurrences(of: "(?s)<think>.*?</think>", with: "", options: .regularExpression)
-        return withoutThoughts.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let responseData = content.data(using: .utf8), let structured = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+            throw NSError(domain: "TimeText", code: 7, userInfo: [NSLocalizedDescriptionKey: "Модель вернула выжимку в неверном формате"])
+        }
+        switch style {
+        case "Связный текст":
+            return (structured["summary"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        case "Задачи и решения":
+            let tasks = structured["tasks"] as? [String] ?? []
+            let decisions = structured["decisions"] as? [String] ?? []
+            var sections: [String] = []
+            if !tasks.isEmpty { sections.append("Задачи:\n" + tasks.map { "• \($0)" }.joined(separator: "\n")) }
+            if !decisions.isEmpty { sections.append("Решения:\n" + decisions.map { "• \($0)" }.joined(separator: "\n")) }
+            return sections.isEmpty ? "Явно названных задач и решений нет." : sections.joined(separator: "\n\n")
+        default:
+            return (structured["points"] as? [String] ?? []).map { "• \($0)" }.joined(separator: "\n")
+        }
     }
 
     private static func httpData(for request: URLRequest) throws -> (Data, Int) {
